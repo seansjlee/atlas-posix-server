@@ -1,7 +1,9 @@
 #include <iostream>
+#include <string>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <sstream>
 
 int main() {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -29,38 +31,52 @@ int main() {
 
     std::cout << "Server is listening on port 8080... Waiting for connections.\n";
 
-    socklen_t addrlen = sizeof(address);
-
-    int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-
-    if (new_socket < 0) {
-        std::cerr << "Failed to accept connection\n";
-        return 1;
-    }
-
-    std::cout << "Connection accepted!\n";
-
-    char buffer[30000] = {0};
-    long bytes_read = read(new_socket, buffer, sizeof(buffer));
-
-    if (bytes_read < 0) {
-        std::cerr << "Failed to read from socket\n";
-    } else {
-        std::cout << "--- RAW HTTP REQUEST ---\n\n";
-        std::cout << buffer << "\n";
-        std::cout << "------------------------\n";
-    }
-
-    std::string response = "HTTP/1.1 200 OK\r\n"
-                           "Content-Type: text/plain\r\n"
-                           "Content-Length: 12\r\n"
-                           "\r\n"
-                           "Hello World!";
+    while (true) {
+        socklen_t addrlen = sizeof(address);
     
-    write(new_socket, response.c_str(), response.length());
-    std::cout << "Response sent to browser.\n";
+        int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+    
+        if (new_socket < 0) {
+            std::cerr << "Failed to accept connection\n";
+            return 1;
+        }
+    
+        std::cout << "Connection accepted!\n";
+    
+        char buffer[30000] = {0};
+        long bytes_read = read(new_socket, buffer, sizeof(buffer));
+    
+        if (bytes_read < 0) {
+            std::cerr << "Failed to read from socket\n";
+        } else {
+            std::string request(buffer);
+            std::istringstream iss(request);
 
-    close(new_socket);
+            std::string method;
+            std::string route;
+            std::string version;
+
+            iss >> method >> route >> version;
+
+            std::cout << "--- PARSED REQUEST ---\n";
+            std::cout << "Method:  " << method << "\n";
+            std::cout << "Route:   " << route << "\n";
+            std::cout << "Version: " << version << "\n";
+            std::cout << "----------------------\n";
+        }
+    
+        std::string response = "HTTP/1.1 200 OK\r\n"
+                               "Content-Type: text/plain\r\n"
+                               "Content-Length: 12\r\n"
+                               "\r\n"
+                               "Hello World!";
+        
+        write(new_socket, response.c_str(), response.length());
+        std::cout << "Response sent to browser.\n";
+    
+        close(new_socket);
+    }
+
     close(server_fd);
 
     return 0;
