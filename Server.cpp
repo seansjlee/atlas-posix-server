@@ -5,7 +5,7 @@
 #include <sstream>
 #include <fstream>
 
-Server::Server(int port) : port(port) {
+Server::Server(int port) : port(port), stop_pool(false) {
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         std::cerr << "Failed to create socket\n";
@@ -20,9 +20,26 @@ Server::Server(int port) : port(port) {
         std::cerr << "Failed to bind to port 8080\n";
         exit(1);
     }
+
+    for (int i = 0; i < 10; ++i) {
+        workers.emplace_back(&Server::workerThread, this);
+    }
 }
 
 Server::~Server() {
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        stop_pool = true;
+    }
+
+    condition.notify_all();
+
+    for (std::thread& worker: workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
     close(server_fd);
 }
 
@@ -32,7 +49,7 @@ void Server::start() {
         exit(1);
     }
 
-    std::cout << "Server is listening on port 8080... Waiting for connections.\n";
+    std::cout << "Server is listening on port " << port << "... Waiting for connections.\n";
 
     while (true) {
         socklen_t addrlen = sizeof(address);
@@ -44,9 +61,14 @@ void Server::start() {
             exit(1);
         }
     
-        std::cout << "Connection accepted!\n";
-    
-        handleClient(new_socket);
+        std::cout << "Connection accepted! Pushing to queue...\n";
+
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            client_queue.push(new_socket);
+        }
+
+        condition.notify_one();
     }
 }
 
@@ -131,4 +153,27 @@ std::string Server::getFileContents(const std::string& filepath) {
     std::ostringstream ss;
     ss << file.rdbuf();
     return ss.str();
+}
+
+void Server::workerThread() {
+    while (true) {
+        int client_socket;
+
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+
+            condition.wait(lock, [this]() {
+                return !client_queue.empty() || stop_pool;
+            });
+
+            if (stop_pool && client_queue.empty()) {
+                return; 
+            }
+
+            client_socket = client_queue.front();
+            client_queue.pop();
+        }
+
+        handleClient(client_socket);
+    }
 }
