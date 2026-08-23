@@ -1,6 +1,7 @@
 #ifndef  SERVER_HPP
 #define SERVER_HPP
 
+#include <string>
 #include <netinet/in.h>
 
 class Server {
@@ -17,6 +18,8 @@ private:
     struct sockaddr_in address;
 
     void handleClient(int client_socket);
+
+    std::string getFileContents(const std::string& filepath);
 };
 
 #endif

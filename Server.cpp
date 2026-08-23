@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sstream>
+#include <fstream>
 
 Server::Server(int port) : port(port) {
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -78,7 +79,8 @@ void Server::handleClient(int client_socket) {
 
     if (route == "/") {
         status_code = "200 OK";
-        body = "Welcome to the Atlas Web Server!"; 
+        content_type = "text/html";
+        body = getFileContents("../public/index.html"); 
     } else if (route == "/api") {
         status_code = "200 OK";
         content_type = "application/json";
@@ -98,4 +100,16 @@ void Server::handleClient(int client_socket) {
     std::cout << "Response sent to browser.\n";
 
     close(client_socket);
+}
+
+std::string Server::getFileContents(const std::string& filepath) {
+    std::ifstream file(filepath, std::ios::binary);
+
+    if (!file.is_open()) {
+        return "";
+    }
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    return ss.str();
 }
