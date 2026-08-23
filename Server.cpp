@@ -77,17 +77,36 @@ void Server::handleClient(int client_socket) {
     std::string content_type = "text/plain";
     std::string body;
 
-    if (route == "/") {
-        status_code = "200 OK";
-        content_type = "text/html";
-        body = getFileContents("../public/index.html"); 
+    if (route.find("..") != std::string::npos) {
+        status_code = "403 Forbidden";
+        body = "403 - Forbidden: Invalid Path";
     } else if (route == "/api") {
         status_code = "200 OK";
         content_type = "application/json";
         body = "{\"name\": \"Atlas\", \"version\": \"1.0\", \"status\": \"running\"}";
     } else {
-        status_code = "404 Not Found";
-        body = "404 - Page Not Found";
+        if (route == "/") {
+            route = "/index.html";
+        }
+
+        std::string filepath = "../public" + route;
+        
+        body = getFileContents(filepath);
+
+        if (body.empty()) {
+            status_code = "404 Not Found";
+            body = "404 - File Not Found";
+        } else {
+            status_code = "200 OK";
+
+            if (filepath.find(".html") != std::string::npos) {
+                content_type = "text/html";
+            } else if (filepath.find(".css") != std::string::npos) {
+                content_type = "text/css";
+            } else if (filepath.find(".json") != std::string::npos) {
+                content_type = "application/json";
+            }
+        }
     }
 
     std::string response = "HTTP/1.1 " + status_code + "\r\n"
