@@ -51,6 +51,15 @@ int main() {
         std::cout << "------------------------\n";
     }
 
+    std::string response = "HTTP/1.1 200 OK\r\n"
+                           "Content-Type: text/plain\r\n"
+                           "Content-Length: 12\r\n"
+                           "\r\n"
+                           "Hello World!";
+    
+    write(new_socket, response.c_str(), response.length());
+    std::cout << "Response sent to browser.\n";
+
     close(new_socket);
     close(server_fd);
 
