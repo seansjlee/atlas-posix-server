@@ -22,7 +22,26 @@ int main() {
         return 1;
     }
 
-    std::cout << "Socket successfully bound to port 8080\n";
+    if (listen(server_fd, 10) < 0) {
+        std::cerr << "Failed to listen on socket\n";
+        return 1;
+    }
+
+    std::cout << "Server is listening on port 8080... Waiting for connections.\n";
+
+    socklen_t addrlen = sizeof(address);
+
+    int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+
+    if (new_socket < 0) {
+        std::cerr << "Failed to accept connection\n";
+        return 1;
+    }
+
+    std::cout << "Connection accepted!\n";
+
+    close(new_socket);
+    close(server_fd);
 
     return 0;
 }
