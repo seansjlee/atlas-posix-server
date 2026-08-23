@@ -30,6 +30,7 @@ private:
     std::string getFileContents(const std::string& filepath);
 
     void workerThread();
+    bool sendAll(int socket, const std::string& data);
 };
 
 #endif

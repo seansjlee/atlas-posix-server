@@ -7,3 +7,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Create the executable from our main file
 add_executable(Atlas main.cpp Server.cpp)
+target_compile_options(Atlas PRIVATE -Wall -Wextra)

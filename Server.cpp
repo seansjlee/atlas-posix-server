@@ -1,14 +1,33 @@
 #include "Server.hpp"
 #include <iostream>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <sstream>
 #include <fstream>
+#include <vector>
+#include <string>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <signal.h>
+#include <cerrno>
+#include <cstring>
+#include <climits>
+#include <cstdlib>
 
 Server::Server(int port) : port(port), stop_pool(false) {
+    signal(SIGPIPE, SIG_IGN);
+
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         std::cerr << "Failed to create socket\n";
+        exit(1);
+    }
+
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        std::cerr << "Failed to set socket options\n";
+        close(server_fd);
         exit(1);
     }
 
@@ -52,11 +71,13 @@ void Server::start() {
     std::cout << "Server is listening on port " << port << "... Waiting for connections.\n";
 
     while (true) {
-        socklen_t addrlen = sizeof(address);
-    
-        int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+        int new_socket = accept(server_fd, nullptr, nullptr);
     
         if (new_socket < 0) {
+            if (errno == EINTR || errno == ECONNABORTED || errno == EMFILE) {
+                std::cerr << "Transient accept error, retrying...\n";
+                continue;
+            }
             std::cerr << "Failed to accept connection\n";
             exit(1);
         }
@@ -72,28 +93,66 @@ void Server::start() {
     }
 }
 
-void Server::handleClient(int client_socket) {
-    char buffer[30000] = {0};
-    long bytes_read = read(client_socket, buffer, sizeof(buffer));
+bool Server::sendAll(int socket, const std::string& data) {
+    size_t total_sent = 0;
+    size_t length = data.length();
 
+    while (total_sent < length) {
+        ssize_t sent = write(socket, data.c_str() + total_sent, length - total_sent);
+        
+        if (sent <= 0) {
+            return false;
+        }
+        
+        total_sent += sent;
+    }
+
+    return true;
+}
+
+void Server::handleClient(int client_socket) {
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+
+    setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    std::string raw_request;
+    char buffer[4096];
+
+    while (true) {
+        long bytes_read = read(client_socket, buffer, sizeof(buffer));
+        
+        if (bytes_read <= 0) {
+            close(client_socket);
+            return;
+        }
+
+        raw_request.append(buffer, bytes_read);
+
+        if (raw_request.length() > 8192) {
+            close(client_socket);
+            return;
+        }
+
+        if (raw_request.find("\r\n\r\n") != std::string::npos) {
+            break;
+        }
+    }
+
+    std::istringstream iss(raw_request);
     std::string method;
     std::string route = "/";
     std::string version;
 
-    if (bytes_read < 0) {
-        std::cerr << "Failed to read from socket\n";
-    } else {
-        std::string request(buffer);
-        std::istringstream iss(request);
+    iss >> method >> route >> version;
 
-        iss >> method >> route >> version;
-
-        std::cout << "--- PARSED REQUEST ---\n";
-        std::cout << "Method:  " << method << "\n";
-        std::cout << "Route:   " << route << "\n";
-        std::cout << "Version: " << version << "\n";
-        std::cout << "----------------------\n";
-    }
+    std::cout << "--- PARSED REQUEST ---\n";
+    std::cout << "Method:  " << method << "\n";
+    std::cout << "Route:   " << route << "\n";
+    std::cout << "Version: " << version << "\n";
+    std::cout << "----------------------\n";
 
     std::string status_code;
     std::string content_type = "text/plain";
@@ -134,18 +193,41 @@ void Server::handleClient(int client_socket) {
     std::string response = "HTTP/1.1 " + status_code + "\r\n"
                             + "Content-Type: " + content_type + "\r\n"
                             + "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                            + "Connection: close\r\n"
                             + "\r\n"
                             + body;
     
-    write(client_socket, response.c_str(), response.length());
+    sendAll(client_socket, response);
     std::cout << "Response sent to browser.\n";
 
     close(client_socket);
 }
 
 std::string Server::getFileContents(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary);
+    char resolved_path[PATH_MAX];
+    if (realpath(filepath.c_str(), resolved_path) == nullptr) {
+        return "";
+    }
 
+    char public_root[PATH_MAX];
+    if (realpath("../public", public_root) == nullptr) {
+        return "";
+    }
+
+    std::string safe_path(resolved_path);
+    std::string safe_root(public_root);
+
+    if (safe_root.size() > 1 && safe_root.back() == '/') {
+        safe_root.pop_back();
+    }
+
+    if (safe_path.size() < safe_root.size() ||
+        safe_path.compare(0, safe_root.size(), safe_root) != 0 ||
+        (safe_path.size() > safe_root.size() && safe_path[safe_root.size()] != '/')) {
+        return "";
+    }
+
+    std::ifstream file(safe_path, std::ios::binary);
     if (!file.is_open()) {
         return "";
     }
