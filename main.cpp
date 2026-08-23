@@ -46,15 +46,15 @@ int main() {
         char buffer[30000] = {0};
         long bytes_read = read(new_socket, buffer, sizeof(buffer));
     
+        std::string method;
+        std::string route = "/";
+        std::string version;
+
         if (bytes_read < 0) {
             std::cerr << "Failed to read from socket\n";
         } else {
             std::string request(buffer);
             std::istringstream iss(request);
-
-            std::string method;
-            std::string route;
-            std::string version;
 
             iss >> method >> route >> version;
 
@@ -64,12 +64,28 @@ int main() {
             std::cout << "Version: " << version << "\n";
             std::cout << "----------------------\n";
         }
+
+        std::string status_code;
+        std::string content_type = "text/plain";
+        std::string body;
+
+        if (route == "/") {
+            status_code = "200 OK";
+            body = "Welcome to the Atlas Web Server!"; 
+        } else if (route == "/api") {
+            status_code = "200 OK";
+            content_type = "application/json";
+            body = "{\"name\": \"Atlas\", \"version\": \"1.0\", \"status\": \"running\"}";
+        } else {
+            status_code = "404 Not Found";
+            body = "404 - Page Not Found";
+        }
     
-        std::string response = "HTTP/1.1 200 OK\r\n"
-                               "Content-Type: text/plain\r\n"
-                               "Content-Length: 12\r\n"
-                               "\r\n"
-                               "Hello World!";
+        std::string response = "HTTP/1.1 " + status_code + "\r\n"
+                             + "Content-Type: " + content_type + "\r\n"
+                             + "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                             + "\r\n"
+                             + body;
         
         write(new_socket, response.c_str(), response.length());
         std::cout << "Response sent to browser.\n";
