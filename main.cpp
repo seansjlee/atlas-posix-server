@@ -1,99 +1,12 @@
+#include "Server.hpp"
 #include <iostream>
-#include <string>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <sstream>
 
 int main() {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    std::cout << "Starting Atlas Server...\n";
 
-    if (server_fd < 0) {
-        std::cerr << "Failed to create socket\n";
-        return 1;
-    }
+    Server atlas_server(8080);
 
-    struct sockaddr_in address{};
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(8080);
-
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        std::cerr << "Failed to bind to port 8080\n";
-        return 1;
-    }
-
-    if (listen(server_fd, 10) < 0) {
-        std::cerr << "Failed to listen on socket\n";
-        return 1;
-    }
-
-    std::cout << "Server is listening on port 8080... Waiting for connections.\n";
-
-    while (true) {
-        socklen_t addrlen = sizeof(address);
-    
-        int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-    
-        if (new_socket < 0) {
-            std::cerr << "Failed to accept connection\n";
-            return 1;
-        }
-    
-        std::cout << "Connection accepted!\n";
-    
-        char buffer[30000] = {0};
-        long bytes_read = read(new_socket, buffer, sizeof(buffer));
-    
-        std::string method;
-        std::string route = "/";
-        std::string version;
-
-        if (bytes_read < 0) {
-            std::cerr << "Failed to read from socket\n";
-        } else {
-            std::string request(buffer);
-            std::istringstream iss(request);
-
-            iss >> method >> route >> version;
-
-            std::cout << "--- PARSED REQUEST ---\n";
-            std::cout << "Method:  " << method << "\n";
-            std::cout << "Route:   " << route << "\n";
-            std::cout << "Version: " << version << "\n";
-            std::cout << "----------------------\n";
-        }
-
-        std::string status_code;
-        std::string content_type = "text/plain";
-        std::string body;
-
-        if (route == "/") {
-            status_code = "200 OK";
-            body = "Welcome to the Atlas Web Server!"; 
-        } else if (route == "/api") {
-            status_code = "200 OK";
-            content_type = "application/json";
-            body = "{\"name\": \"Atlas\", \"version\": \"1.0\", \"status\": \"running\"}";
-        } else {
-            status_code = "404 Not Found";
-            body = "404 - Page Not Found";
-        }
-    
-        std::string response = "HTTP/1.1 " + status_code + "\r\n"
-                             + "Content-Type: " + content_type + "\r\n"
-                             + "Content-Length: " + std::to_string(body.length()) + "\r\n"
-                             + "\r\n"
-                             + body;
-        
-        write(new_socket, response.c_str(), response.length());
-        std::cout << "Response sent to browser.\n";
-    
-        close(new_socket);
-    }
-
-    close(server_fd);
+    atlas_server.start();
 
     return 0;
 }
