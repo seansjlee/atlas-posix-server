@@ -40,6 +40,17 @@ int main() {
 
     std::cout << "Connection accepted!\n";
 
+    char buffer[30000] = {0};
+    long bytes_read = read(new_socket, buffer, sizeof(buffer));
+
+    if (bytes_read < 0) {
+        std::cerr << "Failed to read from socket\n";
+    } else {
+        std::cout << "--- RAW HTTP REQUEST ---\n\n";
+        std::cout << buffer << "\n";
+        std::cout << "------------------------\n";
+    }
+
     close(new_socket);
     close(server_fd);
 
