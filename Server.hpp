@@ -28,6 +28,7 @@ private:
 
     void handleClient(int client_socket);
     std::string getFileContents(const std::string& filepath);
+    std::string getContentType(const std::string& filepath);
 
     void workerThread();
     bool sendAll(int socket, const std::string& data);
