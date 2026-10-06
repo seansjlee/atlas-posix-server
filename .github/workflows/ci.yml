@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Smoke test
+        run: |
+          ./build/Atlas 8080 4 ./public &
+          SERVER_PID=$!
+          sleep 2
+
+          echo "--- checking homepage returns 200 ---"
+          curl -fsS -o /dev/null -w "%{http_code}" http://localhost:8080/ | grep -q 200
+
+          echo "--- checking /api returns JSON ---"
+          curl -fsS http://localhost:8080/api | grep -q '"status": "running"'
+
+          echo "--- checking 404 for missing file ---"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/nope)" = "404"
+
+          kill $SERVER_PID
+          echo "Smoke test passed."
