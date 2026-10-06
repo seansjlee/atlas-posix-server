@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RESULTS_DIR="$ROOT/bench/results"
 mkdir -p "$RESULTS_DIR"
 
-c++ -std=c++17 -O2 -Wall -Wextra -pthread "$ROOT/main.cpp" "$ROOT/Server.cpp" "$ROOT/Poller.cpp" -o "$ROOT/atlas_bench"
+c++ -std=c++17 -O2 -Wall -Wextra -pthread "$ROOT/main.cpp" "$ROOT/Server.cpp" "$ROOT/Poller.cpp" "$ROOT/HttpUtil.cpp" -o "$ROOT/atlas_bench"
 
 ( cd "$ROOT" && ./atlas_bench "$PORT" "$WORKERS" ./public ) >/dev/null 2>&1 &
 SERVER_PID=$!

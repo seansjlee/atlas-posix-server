@@ -1,4 +1,5 @@
 #include "Server.hpp"
+#include "HttpUtil.hpp"
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -280,41 +281,7 @@ std::string Server::buildResponse(const std::string& raw_request) {
 }
 
 std::string Server::getContentType(const std::string& filepath) {
-    static const std::unordered_map<std::string, std::string> mime_types = {
-        {"html", "text/html"},
-        {"htm",  "text/html"},
-        {"css",  "text/css"},
-        {"js",   "application/javascript"},
-        {"json", "application/json"},
-        {"png",  "image/png"},
-        {"jpg",  "image/jpeg"},
-        {"jpeg", "image/jpeg"},
-        {"gif",  "image/gif"},
-        {"svg",  "image/svg+xml"},
-        {"ico",  "image/x-icon"},
-        {"txt",  "text/plain"},
-    };
-
-    size_t slash = filepath.find_last_of('/');
-    size_t dot = filepath.find_last_of('.');
-
-    if (dot == std::string::npos ||
-        (slash != std::string::npos && dot < slash) ||
-        dot + 1 >= filepath.size()) {
-        return "application/octet-stream";
-    }
-
-    std::string ext = filepath.substr(dot + 1);
-    for (char& c : ext) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-
-    auto it = mime_types.find(ext);
-    if (it != mime_types.end()) {
-        return it->second;
-    }
-
-    return "application/octet-stream";
+    return http::contentTypeFor(filepath);
 }
 
 std::string Server::getFileContents(const std::string& filepath) {
@@ -323,20 +290,11 @@ std::string Server::getFileContents(const std::string& filepath) {
         return "";
     }
 
-    std::string safe_path(resolved_path);
-    std::string safe_root(doc_root);
-
-    if (safe_root.size() > 1 && safe_root.back() == '/') {
-        safe_root.pop_back();
-    }
-
-    if (safe_path.size() < safe_root.size() ||
-        safe_path.compare(0, safe_root.size(), safe_root) != 0 ||
-        (safe_path.size() > safe_root.size() && safe_path[safe_root.size()] != '/')) {
+    if (!http::pathContained(doc_root, resolved_path)) {
         return "";
     }
 
-    std::ifstream file(safe_path, std::ios::binary);
+    std::ifstream file(resolved_path, std::ios::binary);
     if (!file.is_open()) {
         return "";
     }
