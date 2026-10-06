@@ -2,12 +2,10 @@
 #define SERVER_HPP
 
 #include <string>
-#include <netinet/in.h>
-#include <vector>
-#include <queue>
-#include <thread>
 #include <mutex>
-#include <condition_variable>
+#include <unordered_map>
+#include <netinet/in.h>
+#include "Poller.hpp"
 
 class Server {
 public:
@@ -16,24 +14,35 @@ public:
     void start();
 
 private:
+    enum class ConnState { Reading, Writing };
+
+    struct Connection {
+        int fd;
+        ConnState state = ConnState::Reading;
+        std::string inbuf;
+        std::string outbuf;
+        size_t sent = 0;
+    };
+
     int port;
     std::string doc_root;
     int server_fd;
     struct sockaddr_in address;
 
-    std::vector<std::thread> workers;
-    std::queue<int> client_queue;
-    std::mutex queue_mutex;
-    std::condition_variable condition;
+    Poller* poller;
+    std::unordered_map<int, Connection> conns;
     std::mutex log_mutex;
-    bool stop_pool;
 
-    void handleClient(int client_socket);
+    void setNonBlocking(int fd);
+    void acceptLoop();
+    void onAcceptReady();
+    void onReadable(Connection& c);
+    void onWritable(Connection& c);
+    void closeConn(int fd);
+
+    std::string buildResponse(const std::string& raw_request);
     std::string getFileContents(const std::string& filepath);
     std::string getContentType(const std::string& filepath);
-
-    void workerThread();
-    bool sendAll(int socket, const std::string& data);
 
     enum class LogLevel { Info, Warn, Error};
     void log(LogLevel level, const std::string& message);

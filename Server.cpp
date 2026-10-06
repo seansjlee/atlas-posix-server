@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <cerrno>
 #include <cstring>
@@ -39,7 +40,8 @@ void Server::log(LogLevel level, const std::string&message) {
 }
 
 Server::Server(int port, int num_workers, const std::string& doc_root)
-    : port(port), stop_pool(false) {
+    : port(port) {
+    (void)num_workers;
     signal(SIGPIPE, SIG_IGN);
 
     char resolved_root[PATH_MAX];
@@ -71,120 +73,163 @@ Server::Server(int port, int num_workers, const std::string& doc_root)
         exit(1);
     }
 
-    for (int i = 0; i < num_workers; ++i) {
-        workers.emplace_back(&Server::workerThread, this);
-    }
+    poller = Poller::create();
 }
 
 Server::~Server() {
-    {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-        stop_pool = true;
-    }
-
-    condition.notify_all();
-
-    for (std::thread& worker: workers) {
-        if (worker.joinable()) {
-            worker.join();
-        }
-    }
-
+    delete poller;
     close(server_fd);
 }
 
+void Server::setNonBlocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 void Server::start() {
-    if (listen(server_fd, 10) < 0) {
+    if (listen(server_fd, SOMAXCONN) < 0) {
         std::cerr << "Failed to listen on socket\n";
         exit(1);
     }
 
-    log(LogLevel::Info, "Server is listening on port " + std::to_string(port) + "... Waiting for connections.");
+    setNonBlocking(server_fd);
+    poller->add(server_fd, POLL_READ);
+
+    log(LogLevel::Info, "Server is listening on port " + std::to_string(port) + "...");
+
+    acceptLoop();
+}
+
+void Server::acceptLoop() {
+    std::vector<PollEvent> events;
 
     while (true) {
-        int new_socket = accept(server_fd, nullptr, nullptr);
-    
-        if (new_socket < 0) {
-            if (errno == EINTR || errno == ECONNABORTED || errno == EMFILE) {
-                log(LogLevel::Warn, "Transient accept error, retrying...");
+        int n = poller->wait(events, -1);
+        if (n < 0) {
+            log(LogLevel::Error, "poller wait failed");
+            continue;
+        }
+
+        for (int i = 0; i < n; ++i) {
+            int fd = events[i].fd;
+
+            if (fd == server_fd) {
+                onAcceptReady();
                 continue;
             }
-            std::cerr << "Failed to accept connection\n";
-            exit(1);
-        }
-    
-        log(LogLevel::Info, "Connection accepted! Pushing to queue...");
 
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            client_queue.push(new_socket);
-        }
+            auto it = conns.find(fd);
+            if (it == conns.end()) {
+                continue;
+            }
 
-        condition.notify_one();
+            if (events[i].flags & POLL_READ) {
+                onReadable(it->second);
+            } else if (events[i].flags & POLL_WRITE) {
+                onWritable(it->second);
+            }
+        }
     }
 }
 
-bool Server::sendAll(int socket, const std::string& data) {
-    size_t total_sent = 0;
-    size_t length = data.length();
-
-    while (total_sent < length) {
-        ssize_t sent = write(socket, data.c_str() + total_sent, length - total_sent);
-        
-        if (sent <= 0) {
-            return false;
+void Server::onAcceptReady() {
+    while (true) {
+        int client = accept(server_fd, nullptr, nullptr);
+        if (client < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            if (errno == EINTR || errno == ECONNABORTED) {
+                continue;
+            }
+            log(LogLevel::Warn, "accept error");
+            break;
         }
-        
-        total_sent += sent;
-    }
 
-    return true;
+        setNonBlocking(client);
+        Connection c;
+        c.fd = client;
+        conns[client] = std::move(c);
+        poller->add(client, POLL_READ);
+    }
 }
 
-void Server::handleClient(int client_socket) {
-    struct timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-
-    setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-    std::string raw_request;
+void Server::onReadable(Connection& c) {
     char buffer[4096];
 
     while (true) {
-        long bytes_read = read(client_socket, buffer, sizeof(buffer));
-        
-        if (bytes_read <= 0) {
-            close(client_socket);
+        ssize_t bytes = read(c.fd, buffer, sizeof(buffer));
+
+        if (bytes > 0) {
+            c.inbuf.append(buffer, bytes);
+            if (c.inbuf.size() > 8192) {
+                closeConn(c.fd);
+                return;
+            }
+            continue;
+        }
+
+        if (bytes == 0) {
+            closeConn(c.fd);
             return;
         }
 
-        raw_request.append(buffer, bytes_read);
-
-        if (raw_request.length() > 8192) {
-            close(client_socket);
-            return;
-        }
-
-        if (raw_request.find("\r\n\r\n") != std::string::npos) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
             break;
         }
+        if (errno == EINTR) {
+            continue;
+        }
+        closeConn(c.fd);
+        return;
     }
 
+    if (c.inbuf.find("\r\n\r\n") == std::string::npos) {
+        return;
+    }
+
+    c.outbuf = buildResponse(c.inbuf);
+    c.sent = 0;
+    c.state = ConnState::Writing;
+    poller->modify(c.fd, POLL_WRITE);
+    onWritable(c);
+}
+
+void Server::onWritable(Connection& c) {
+    while (c.sent < c.outbuf.size()) {
+        ssize_t n = write(c.fd, c.outbuf.data() + c.sent, c.outbuf.size() - c.sent);
+
+        if (n > 0) {
+            c.sent += n;
+            continue;
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        closeConn(c.fd);
+        return;
+    }
+
+    closeConn(c.fd);
+}
+
+void Server::closeConn(int fd) {
+    poller->remove(fd);
+    close(fd);
+    conns.erase(fd);
+}
+
+std::string Server::buildResponse(const std::string& raw_request) {
     std::istringstream iss(raw_request);
     std::string method;
     std::string route = "/";
     std::string version;
 
     iss >> method >> route >> version;
-
-    log(LogLevel::Info,
-        "--- PARSED REQUEST ---\n"
-        "Method:  " + method + "\n"
-        "Route:   " + route + "\n"
-        "Version: " + version + "\n"
-        "----------------------");
 
     std::string status_code;
     std::string content_type = "text/plain";
@@ -203,7 +248,6 @@ void Server::handleClient(int client_socket) {
         }
 
         std::string filepath = doc_root + route;
-        
         body = getFileContents(filepath);
 
         if (body.empty()) {
@@ -215,17 +259,12 @@ void Server::handleClient(int client_socket) {
         }
     }
 
-    std::string response = "HTTP/1.1 " + status_code + "\r\n"
-                            + "Content-Type: " + content_type + "\r\n"
-                            + "Content-Length: " + std::to_string(body.length()) + "\r\n"
-                            + "Connection: close\r\n"
-                            + "\r\n"
-                            + body;
-    
-    sendAll(client_socket, response);
-    log(LogLevel::Info, "Response sent to browser.");
-
-    close(client_socket);
+    return "HTTP/1.1 " + status_code + "\r\n"
+         + "Content-Type: " + content_type + "\r\n"
+         + "Content-Length: " + std::to_string(body.length()) + "\r\n"
+         + "Connection: close\r\n"
+         + "\r\n"
+         + body;
 }
 
 std::string Server::getContentType(const std::string& filepath) {
@@ -295,25 +334,3 @@ std::string Server::getFileContents(const std::string& filepath) {
     return ss.str();
 }
 
-void Server::workerThread() {
-    while (true) {
-        int client_socket;
-
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-
-            condition.wait(lock, [this]() {
-                return !client_queue.empty() || stop_pool;
-            });
-
-            if (stop_pool && client_queue.empty()) {
-                return; 
-            }
-
-            client_socket = client_queue.front();
-            client_queue.pop();
-        }
-
-        handleClient(client_socket);
-    }
-}
