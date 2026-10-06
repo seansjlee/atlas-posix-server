@@ -24,6 +24,7 @@ private:
     std::queue<int> client_queue;
     std::mutex queue_mutex;
     std::condition_variable condition;
+    std::mutex log_mutex;
     bool stop_pool;
 
     void handleClient(int client_socket);
@@ -32,6 +33,9 @@ private:
 
     void workerThread();
     bool sendAll(int socket, const std::string& data);
+
+    enum class LogLevel { Info, Warn, Error};
+    void log(LogLevel level, const std::string& message);
 };
 
 #endif

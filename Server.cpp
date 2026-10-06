@@ -17,6 +17,27 @@
 #include <climits>
 #include <cstdlib>
 
+void Server::log(LogLevel level, const std::string&message) {
+    const char* prefix = "[INFO] ";
+    std::ostream* out = &std::cout;
+
+    switch (level) {
+        case LogLevel::Warn:
+            prefix = "[WARN] ";
+            out = &std::cerr;
+            break;
+        case LogLevel::Error:
+            prefix = "[ERROR] ";
+            out = &std::cerr;
+            break;
+        case LogLevel::Info:
+            break;
+    }
+
+    std::lock_guard<std::mutex> lock(log_mutex);
+    *out << prefix << message << "\n";
+}
+
 Server::Server(int port) : port(port), stop_pool(false) {
     signal(SIGPIPE, SIG_IGN);
 
@@ -70,21 +91,21 @@ void Server::start() {
         exit(1);
     }
 
-    std::cout << "Server is listening on port " << port << "... Waiting for connections.\n";
+    log(LogLevel::Info, "Server is listening on port " + std::to_string(port) + "... Waiting for connections.");
 
     while (true) {
         int new_socket = accept(server_fd, nullptr, nullptr);
     
         if (new_socket < 0) {
             if (errno == EINTR || errno == ECONNABORTED || errno == EMFILE) {
-                std::cerr << "Transient accept error, retrying...\n";
+                log(LogLevel::Warn, "Transient accept error, retrying...");
                 continue;
             }
             std::cerr << "Failed to accept connection\n";
             exit(1);
         }
     
-        std::cout << "Connection accepted! Pushing to queue...\n";
+        log(LogLevel::Info, "Connection accepted! Pushing to queue...");
 
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
@@ -150,11 +171,12 @@ void Server::handleClient(int client_socket) {
 
     iss >> method >> route >> version;
 
-    std::cout << "--- PARSED REQUEST ---\n";
-    std::cout << "Method:  " << method << "\n";
-    std::cout << "Route:   " << route << "\n";
-    std::cout << "Version: " << version << "\n";
-    std::cout << "----------------------\n";
+    log(LogLevel::Info,
+        "--- PARSED REQUEST ---\n"
+        "Method:  " + method + "\n"
+        "Route:   " + route + "\n"
+        "Version: " + version + "\n"
+        "----------------------");
 
     std::string status_code;
     std::string content_type = "text/plain";
@@ -193,7 +215,7 @@ void Server::handleClient(int client_socket) {
                             + body;
     
     sendAll(client_socket, response);
-    std::cout << "Response sent to browser.\n";
+    log(LogLevel::Info, "Response sent to browser.");
 
     close(client_socket);
 }
