@@ -5,6 +5,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <chrono>
 #include <unordered_map>
 #include <netinet/in.h>
 #include "Poller.hpp"
@@ -24,6 +25,7 @@ private:
         std::string inbuf;
         std::string outbuf;
         size_t sent = 0;
+        std::chrono::steady_clock::time_point last_active;
     };
 
     struct Worker {
@@ -46,6 +48,7 @@ private:
     void onReadable(Worker& w, Connection& c);
     void onWritable(Worker& w, Connection& c);
     void closeConn(Worker& w, int fd);
+    void sweepIdle(Worker& w);
 
     std::string buildResponse(const std::string& raw_request);
     std::string getFileContents(const std::string& filepath);

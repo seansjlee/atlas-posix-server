@@ -57,7 +57,8 @@ only shared resource is the logger.
 Within a worker, each connection is a small state machine (reading the request,
 then writing the response). Sockets are non-blocking, so a slow client never
 stalls the others: reads drain until `EAGAIN`, and a partially written response
-is resumed on the next writable event.
+is resumed on the next writable event. Connections idle for more than 10 seconds
+are reaped on a timer so a client cannot hold one open indefinitely.
 
 The `epoll` and `kqueue` differences are hidden behind a `Poller` interface
 (`add` / `modify` / `remove` / `wait`), selected at compile time. Adding a

@@ -117,7 +117,7 @@ void Server::runWorker(Worker& w) {
     std::vector<PollEvent> events;
 
     while (true) {
-        int n = w.poller->wait(events, -1);
+        int n = w.poller->wait(events, 1000);
         if (n < 0) {
             log(LogLevel::Error, "poller wait failed");
             continue;
@@ -142,6 +142,8 @@ void Server::runWorker(Worker& w) {
                 onWritable(w, it->second);
             }
         }
+
+        sweepIdle(w);
     }
 }
 
@@ -162,6 +164,7 @@ void Server::onAcceptReady(Worker& w) {
         setNonBlocking(client);
         Connection c;
         c.fd = client;
+        c.last_active = std::chrono::steady_clock::now();
         w.conns[client] = std::move(c);
         w.poller->add(client, POLL_READ);
     }
@@ -175,6 +178,7 @@ void Server::onReadable(Worker& w, Connection& c) {
 
         if (bytes > 0) {
             c.inbuf.append(buffer, bytes);
+            c.last_active = std::chrono::steady_clock::now();
             if (c.inbuf.size() > 8192) {
                 closeConn(w, c.fd);
                 return;
@@ -214,6 +218,7 @@ void Server::onWritable(Worker& w, Connection& c) {
 
         if (n > 0) {
             c.sent += n;
+            c.last_active = std::chrono::steady_clock::now();
             continue;
         }
 
@@ -234,6 +239,23 @@ void Server::closeConn(Worker& w, int fd) {
     w.poller->remove(fd);
     close(fd);
     w.conns.erase(fd);
+}
+
+void Server::sweepIdle(Worker& w) {
+    auto now = std::chrono::steady_clock::now();
+    std::vector<int> idle;
+
+    for (const auto& entry : w.conns) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - entry.second.last_active).count();
+        if (elapsed >= 10) {
+            idle.push_back(entry.first);
+        }
+    }
+
+    for (int fd : idle) {
+        closeConn(w, fd);
+    }
 }
 
 std::string Server::buildResponse(const std::string& raw_request) {
