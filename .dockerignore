@@ -1,0 +1,9 @@
+build/
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+*.o
+Dockerfile
+.dockerignore
