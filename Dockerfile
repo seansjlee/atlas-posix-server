@@ -6,7 +6,7 @@ RUN apt-get update && \
 
 WORKDIR /src
 COPY CMakeLists.txt .
-COPY main.cpp Server.cpp Server.hpp ./
+COPY main.cpp Server.cpp Poller.cpp Server.hpp Poller.hpp ./
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build
