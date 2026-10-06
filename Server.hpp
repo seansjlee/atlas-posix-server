@@ -11,12 +11,13 @@
 
 class Server {
 public:
-    Server(int port);
+    Server(int port, int num_workers, const std::string& doc_root);
     ~Server();
     void start();
 
 private:
     int port;
+    std::string doc_root;
     int server_fd;
     struct sockaddr_in address;
 

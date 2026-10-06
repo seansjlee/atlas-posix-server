@@ -38,8 +38,16 @@ void Server::log(LogLevel level, const std::string&message) {
     *out << prefix << message << "\n";
 }
 
-Server::Server(int port) : port(port), stop_pool(false) {
+Server::Server(int port, int num_workers, const std::string& doc_root)
+    : port(port), stop_pool(false) {
     signal(SIGPIPE, SIG_IGN);
+
+    char resolved_root[PATH_MAX];
+    if (realpath(doc_root.c_str(), resolved_root) == nullptr) {
+        std::cerr << "Failed to resolve document root: " << doc_root << "\n";
+        exit(1);
+    }
+    this->doc_root = resolved_root;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -63,7 +71,7 @@ Server::Server(int port) : port(port), stop_pool(false) {
         exit(1);
     }
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < num_workers; ++i) {
         workers.emplace_back(&Server::workerThread, this);
     }
 }
@@ -194,7 +202,7 @@ void Server::handleClient(int client_socket) {
             route = "/index.html";
         }
 
-        std::string filepath = "../public" + route;
+        std::string filepath = doc_root + route;
         
         body = getFileContents(filepath);
 
@@ -264,13 +272,8 @@ std::string Server::getFileContents(const std::string& filepath) {
         return "";
     }
 
-    char public_root[PATH_MAX];
-    if (realpath("../public", public_root) == nullptr) {
-        return "";
-    }
-
     std::string safe_path(resolved_path);
-    std::string safe_root(public_root);
+    std::string safe_root(doc_root);
 
     if (safe_root.size() > 1 && safe_root.back() == '/') {
         safe_root.pop_back();
