@@ -40,8 +40,7 @@ void Server::log(LogLevel level, const std::string&message) {
 }
 
 Server::Server(int port, int num_workers, const std::string& doc_root)
-    : port(port) {
-    (void)num_workers;
+    : port(port), num_workers(num_workers) {
     signal(SIGPIPE, SIG_IGN);
 
     char resolved_root[PATH_MAX];
@@ -50,35 +49,14 @@ Server::Server(int port, int num_workers, const std::string& doc_root)
         exit(1);
     }
     this->doc_root = resolved_root;
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        std::cerr << "Failed to create socket\n";
-        exit(1);
-    }
-
-    int opt = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        std::cerr << "Failed to set socket options\n";
-        close(server_fd);
-        exit(1);
-    }
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
-
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        std::cerr << "Failed to bind to port 8080\n";
-        exit(1);
-    }
-
-    poller = Poller::create();
 }
 
 Server::~Server() {
-    delete poller;
-    close(server_fd);
+    for (std::thread& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
 }
 
 void Server::setNonBlocking(int fd) {
@@ -86,25 +64,59 @@ void Server::setNonBlocking(int fd) {
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-void Server::start() {
-    if (listen(server_fd, SOMAXCONN) < 0) {
+int Server::openListener() {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        std::cerr << "Failed to create socket\n";
+        exit(1);
+    }
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        std::cerr << "Failed to bind to port " << port << "\n";
+        exit(1);
+    }
+
+    if (listen(fd, SOMAXCONN) < 0) {
         std::cerr << "Failed to listen on socket\n";
         exit(1);
     }
 
-    setNonBlocking(server_fd);
-    poller->add(server_fd, POLL_READ);
-
-    log(LogLevel::Info, "Server is listening on port " + std::to_string(port) + "...");
-
-    acceptLoop();
+    setNonBlocking(fd);
+    return fd;
 }
 
-void Server::acceptLoop() {
+void Server::start() {
+    int n = num_workers > 0 ? num_workers : 1;
+    log(LogLevel::Info, "Server listening on port " + std::to_string(port)
+                        + " with " + std::to_string(n) + " workers...");
+
+    std::vector<Worker> workers(n);
+    for (int i = 0; i < n; ++i) {
+        workers[i].listen_fd = openListener();
+        workers[i].poller = Poller::create();
+        workers[i].poller->add(workers[i].listen_fd, POLL_READ);
+    }
+
+    for (int i = 1; i < n; ++i) {
+        threads.emplace_back(&Server::runWorker, this, std::ref(workers[i]));
+    }
+    runWorker(workers[0]);
+}
+
+void Server::runWorker(Worker& w) {
     std::vector<PollEvent> events;
 
     while (true) {
-        int n = poller->wait(events, -1);
+        int n = w.poller->wait(events, -1);
         if (n < 0) {
             log(LogLevel::Error, "poller wait failed");
             continue;
@@ -113,28 +125,28 @@ void Server::acceptLoop() {
         for (int i = 0; i < n; ++i) {
             int fd = events[i].fd;
 
-            if (fd == server_fd) {
-                onAcceptReady();
+            if (fd == w.listen_fd) {
+                onAcceptReady(w);
                 continue;
             }
 
-            auto it = conns.find(fd);
-            if (it == conns.end()) {
+            auto it = w.conns.find(fd);
+            if (it == w.conns.end()) {
                 continue;
             }
 
             if (events[i].flags & POLL_READ) {
-                onReadable(it->second);
+                onReadable(w, it->second);
             } else if (events[i].flags & POLL_WRITE) {
-                onWritable(it->second);
+                onWritable(w, it->second);
             }
         }
     }
 }
 
-void Server::onAcceptReady() {
+void Server::onAcceptReady(Worker& w) {
     while (true) {
-        int client = accept(server_fd, nullptr, nullptr);
+        int client = accept(w.listen_fd, nullptr, nullptr);
         if (client < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
@@ -149,12 +161,12 @@ void Server::onAcceptReady() {
         setNonBlocking(client);
         Connection c;
         c.fd = client;
-        conns[client] = std::move(c);
-        poller->add(client, POLL_READ);
+        w.conns[client] = std::move(c);
+        w.poller->add(client, POLL_READ);
     }
 }
 
-void Server::onReadable(Connection& c) {
+void Server::onReadable(Worker& w, Connection& c) {
     char buffer[4096];
 
     while (true) {
@@ -163,14 +175,14 @@ void Server::onReadable(Connection& c) {
         if (bytes > 0) {
             c.inbuf.append(buffer, bytes);
             if (c.inbuf.size() > 8192) {
-                closeConn(c.fd);
+                closeConn(w, c.fd);
                 return;
             }
             continue;
         }
 
         if (bytes == 0) {
-            closeConn(c.fd);
+            closeConn(w, c.fd);
             return;
         }
 
@@ -180,7 +192,7 @@ void Server::onReadable(Connection& c) {
         if (errno == EINTR) {
             continue;
         }
-        closeConn(c.fd);
+        closeConn(w, c.fd);
         return;
     }
 
@@ -191,11 +203,11 @@ void Server::onReadable(Connection& c) {
     c.outbuf = buildResponse(c.inbuf);
     c.sent = 0;
     c.state = ConnState::Writing;
-    poller->modify(c.fd, POLL_WRITE);
-    onWritable(c);
+    w.poller->modify(c.fd, POLL_WRITE);
+    onWritable(w, c);
 }
 
-void Server::onWritable(Connection& c) {
+void Server::onWritable(Worker& w, Connection& c) {
     while (c.sent < c.outbuf.size()) {
         ssize_t n = write(c.fd, c.outbuf.data() + c.sent, c.outbuf.size() - c.sent);
 
@@ -210,17 +222,17 @@ void Server::onWritable(Connection& c) {
         if (errno == EINTR) {
             continue;
         }
-        closeConn(c.fd);
+        closeConn(w, c.fd);
         return;
     }
 
-    closeConn(c.fd);
+    closeConn(w, c.fd);
 }
 
-void Server::closeConn(int fd) {
-    poller->remove(fd);
+void Server::closeConn(Worker& w, int fd) {
+    w.poller->remove(fd);
     close(fd);
-    conns.erase(fd);
+    w.conns.erase(fd);
 }
 
 std::string Server::buildResponse(const std::string& raw_request) {
