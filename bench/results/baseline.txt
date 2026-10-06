@@ -1,0 +1,19 @@
+Atlas benchmark — 2026-10-06T14:49:21Z
+Host: Darwin 25.6.0 arm64
+Config: workers=10 wrk-threads=4 connections=100 duration=30s
+Command: wrk -t4 -c100 -d30s --latency http://localhost:8080/
+----------------------------------------
+Running 30s test @ http://localhost:8080/
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   264.58us    2.29ms 111.94ms   99.85%
+    Req/Sec     7.16k     4.91k   18.04k    58.41%
+  Latency Distribution
+     50%  184.00us
+     75%  210.00us
+     90%  238.00us
+     99%  348.00us
+  244165 requests in 30.10s, 94.07MB read
+  Socket errors: connect 93, read 32, write 0, timeout 0
+Requests/sec:   8112.98
+Transfer/sec:      3.13MB

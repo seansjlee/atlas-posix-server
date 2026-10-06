@@ -10,3 +10,6 @@ compile_commands.json
 .DS_Store
 .vscode/
 .idea/
+
+# Benchmark temp binary
+atlas_bench
