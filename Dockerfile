@@ -1,4 +1,3 @@
-# ---- Build stage ----
 FROM debian:bookworm-slim AS build
 
 RUN apt-get update && \
@@ -12,10 +11,8 @@ COPY main.cpp Server.cpp Server.hpp ./
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build
 
-# ---- Runtime stage ----
 FROM debian:bookworm-slim AS runtime
 
-# Run as a non-root user
 RUN useradd --system --no-create-home atlas
 
 WORKDIR /app
@@ -26,5 +23,4 @@ USER atlas
 
 EXPOSE 8080
 
-# port, workers, doc_root — matches main.cpp's positional args
 CMD ["./atlas", "8080", "10", "./public"]
